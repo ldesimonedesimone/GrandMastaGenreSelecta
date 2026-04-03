@@ -1,12 +1,12 @@
 # GrandMastaGenreSelecta
 
-A Slack slash command that takes a McMaster-Carr SKU from your physical catalog, uses Claude AI to creatively map it to a music genre from [EveryNoise.com](https://everynoise.com), and posts the result to your Slack channel — complete with a one-click Spotify link.
+A Slack slash command that takes a McMaster-Carr SKU from your physical catalog, deterministically maps it to a music genre in the style of [EveryNoise.com](https://everynoise.com) (pure Python — no AI), and posts the result to your Slack channel with Spotify and EveryNoise links.
 
 **Example output:**
 > 🔩 **GrandMastaGenreSelecta** 🎵
 > SKU: `91251A307` → Genre: *deep nordic folk*
-> SKU Decoded: A high-tensile hex bolt — cold, precise, Scandinavian-engineered.
-> Why this genre: Like this bolt, deep nordic folk holds everything together in silence and ice.
+> SKU Decoded: Letters `A` × digits `91251307` → chrome vanadium attitude, hex nut certainty, catalog gravity.
+> Why this genre: The checksum that fingerprinted `91251A307` also landed on *deep nordic folk* — same warehouse, different aisle.
 > [🎧 Open in Spotify] [🗺️ Explore on EveryNoise]
 
 ---
@@ -14,21 +14,15 @@ A Slack slash command that takes a McMaster-Carr SKU from your physical catalog,
 ## How It Works
 
 1. You type `/grandmastagenreselecta` followed by a SKU from your physical McMaster-Carr catalog
-2. Claude AI decodes the SKU and maps it to a genre on EveryNoise.com
-3. A message is posted to your channel with the SKU, genre, Claude's reasoning, and links
+2. The app hashes the SKU and picks a genre plus canned “decode” lines (same SKU → same result every time)
+3. A message is posted to your channel with the SKU, genre, text, and links
 
 ---
 
 ## Setup
 
-### 1. Get Your API Keys
+### 1. Slack app
 
-#### Anthropic (Claude)
-1. Go to [console.anthropic.com](https://console.anthropic.com)
-2. Create an API key
-3. Save it — you'll need it as `ANTHROPIC_API_KEY`
-
-#### Slack App
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
 2. Name it "GrandMastaGenreSelecta", pick your workspace
 3. Go to **Slash Commands** → **Create New Command**
@@ -93,7 +87,6 @@ Deploy to Railway or Render (see below), then use the app’s live URL as the Re
 1. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub
 2. Push this project to a GitHub repo, connect it
 3. Add environment variables in Railway dashboard:
-   - `ANTHROPIC_API_KEY`
    - `SLACK_SIGNING_SECRET`
 4. Railway auto-detects the `Procfile` and deploys
 5. Copy the generated URL (e.g. `https://grandmastagenreselecta.up.railway.app`)
@@ -109,7 +102,6 @@ Deploy to Railway or Render (see below), then use the app’s live URL as the Re
 #### Option C: Your own server
 ```bash
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=...
 export SLACK_SIGNING_SECRET=...
 gunicorn app:app --bind 0.0.0.0:3000
 ```
@@ -136,7 +128,7 @@ In any Slack channel your app is invited to:
 Just type the SKU from your physical catalog after the command. The bot responds in-channel with:
 - The SKU you entered
 - The mapped music genre
-- Claude's creative interpretation of the SKU
+- Deterministic “decode” lines derived from the SKU
 - A button to open the genre in Spotify
 - A button to explore the genre on EveryNoise.com
 
@@ -159,6 +151,5 @@ GrandMastaGenreSelecta/
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | ✅ | Your Anthropic API key |
 | `SLACK_SIGNING_SECRET` | ✅ | From Slack app Basic Information |
 | `PORT` | Optional | Defaults to 3000 |

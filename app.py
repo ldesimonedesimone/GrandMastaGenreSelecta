@@ -2,50 +2,128 @@ import os
 import hashlib
 import hmac
 import time
-import requests
 from flask import Flask, request, jsonify
-from anthropic import Anthropic
 
 app = Flask(__name__)
 
-# ── Clients ────────────────────────────────────────────────────────────────
-anthropic_client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+# ── Deterministic SKU → genre (no LLM) ───────────────────────────────────────
+# Genres styled like EveryNoise.com (lowercase); same SKU always maps the same way.
+_GENRES = (
+    "vapor twitch",
+    "dark clubbing",
+    "deep nordic folk",
+    "industrial metal",
+    "labor day",
+    "float house",
+    "dungeon synth",
+    "slow motion techno",
+    "organic ambient",
+    "post-dubstep",
+    "shoegaze",
+    "math rock",
+    "garage psych",
+    "stomp and holler",
+    "future funk",
+    "wonky",
+    "microhouse",
+    "deep disco",
+    "cold wave",
+    "space rock",
+    "art pop",
+    "neo-psychedelic",
+    "chamber psych",
+    "downtempo",
+    "trip hop",
+    "big beat",
+    "breakcore",
+    "footwork",
+    "uk funky",
+    "balearic",
+    "tropical house",
+    "progressive trance",
+    "melodic techno",
+    "minimal wave",
+    "noise rock",
+    "post-punk revival",
+    "sludge metal",
+    "stoner rock",
+    "bluegrass",
+    "outlaw country",
+    "neo-soul",
+    "future garage",
+    "uk drill",
+    "boom bap",
+    "abstract hip hop",
+    "jazz rap",
+    "spiritual jazz",
+    "latin jazz",
+    "afrobeat",
+    "highlife",
+)
 
-# ── Claude: SKU → genre mapping ─────────────────────────────────────────────
+_MATERIALS = (
+    "cold-rolled patience",
+    "chrome vanadium attitude",
+    "black oxide mystery",
+    "passivated calm",
+    "nylon quiet",
+    "brass-forward swagger",
+    "silicone slip",
+    "steel certainty",
+    "aluminum lightness",
+    "stainless resolve",
+)
+
+_FORMS = (
+    "socket head cap energy",
+    "wave-spring tension",
+    "thrust-washer diplomacy",
+    "set-screw honesty",
+    "retaining-ring drama",
+    "shoulder-bolt posture",
+    "hex nut certainty",
+    "threaded insert patience",
+    "spacer sleeve poise",
+    "cotter pin loyalty",
+)
+
+_MOODS = (
+    "tight tolerances",
+    "catalog gravity",
+    "bin-location clarity",
+    "±0.001 vibes",
+    "reorder-point melancholy",
+    "bulk-pack euphoria",
+    "line-item poetry",
+)
+
+_CONN = (
+    "The checksum that fingerprinted `{sku}` also landed on _{genre}_ — same warehouse, different aisle.",
+    "`{sku}` hashes to the same shelf bin as _{genre}_: hardware on the outside, BPM on the inside.",
+    "Digits and letters in `{sku}` routed the pick list straight to _{genre}_.",
+    "If this SKU were a bin label, the listening bin next to it would be _{genre}_.",
+)
+
+
+def _sku_entropy(sku: str) -> int:
+    return int(hashlib.sha256(sku.encode("utf-8")).hexdigest(), 16)
+
+
 def sku_to_genre(sku: str) -> dict:
-    """
-    Ask Claude to creatively map a McMaster-Carr SKU to a music genre
-    from EveryNoise.com. Returns a dict with genre + reasoning.
-    """
-    prompt = f"""You are a creative DJ who works at an industrial supply warehouse.
-Your job is to map McMaster-Carr hardware SKUs to music genres from EveryNoise.com.
+    h = _sku_entropy(sku)
+    genre = _GENRES[h % len(_GENRES)]
 
-The SKU is: {sku}
-
-Rules:
-1. Decode the SKU creatively — the numbers and letters can suggest material, size,
-   application, texture, weight, era, or vibe.
-2. Map it to a real genre from EveryNoise.com (e.g. "vapor twitch", "dark clubbing",
-   "deep nordic folk", "industrial metal", "labor day", etc.)
-3. The connection should be surprising, funny, or poetic — not obvious.
-4. Keep the genre name lowercase, exactly as it would appear on everynoise.com.
-
-Respond with ONLY valid JSON in this exact format (no markdown, no extra text):
-{{
-  "genre": "the genre name",
-  "sku_meaning": "one sentence on what the SKU 'means'",
-  "connection": "one sentence on why this SKU maps to this genre"
-}}"""
-
-    message = anthropic_client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}],
+    letters = "".join(c for c in sku if c.isalpha()) or "null"
+    digits = "".join(c for c in sku if c.isdigit()) or "0"
+    m = _MATERIALS[(h // 7) % len(_MATERIALS)]
+    f = _FORMS[(h // 13) % len(_FORMS)]
+    mood = _MOODS[(h // 19) % len(_MOODS)]
+    sku_meaning = (
+        f"Letters `{letters}` × digits `{digits}` → {m}, {f}, {mood}."
     )
 
-    import json
-    raw = message.content[0].text.strip()
-    return json.loads(raw)
+    conn = _CONN[(h // 23) % len(_CONN)].format(sku=sku, genre=genre)
+    return {"genre": genre, "sku_meaning": sku_meaning, "connection": conn}
 
 # ── Spotify deep link builder ────────────────────────────────────────────────
 def spotify_deep_link(genre: str) -> str:
@@ -153,6 +231,7 @@ def build_slack_message(sku: str, result: dict) -> dict:
         ],
     }
 
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
@@ -202,11 +281,10 @@ def grandmasta_genre_selecta():
     except Exception as e:
         return jsonify({
             "response_type": "ephemeral",
-            "text": f"⚠️ Something went wrong generating today's genre: {str(e)}",
+            "text": f"⚠️ Something went wrong: {str(e)}",
         })
 
-    message = build_slack_message(sku, result)
-    return jsonify(message)
+    return jsonify(build_slack_message(sku, result))
 
 
 if __name__ == "__main__":
