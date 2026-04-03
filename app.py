@@ -154,6 +154,16 @@ def build_slack_message(sku: str, result: dict) -> dict:
     }
 
 # ── Routes ───────────────────────────────────────────────────────────────────
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({
+        "app": "GrandMastaGenreSelecta",
+        "status": "running",
+        "health": "/health",
+        "slack_command_url": "/grandmastagenreselecta",
+    })
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
