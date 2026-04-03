@@ -2,6 +2,7 @@ import os
 import hashlib
 import hmac
 import time
+from urllib.parse import quote
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -125,16 +126,18 @@ def sku_to_genre(sku: str) -> dict:
     conn = _CONN[(h // 23) % len(_CONN)].format(sku=sku, genre=genre)
     return {"genre": genre, "sku_meaning": sku_meaning, "connection": conn}
 
-# ── Spotify deep link builder ────────────────────────────────────────────────
-def spotify_deep_link(genre: str) -> str:
-    """Build a Spotify search deep link for the genre."""
-    encoded = genre.replace(" ", "%20")
-    return f"spotify:search:{encoded}"
+# ── Spotify playlist search (web opens app; same path as “deep link” for playlists)
+def spotify_playlist_search_url(query: str) -> str:
+    q = quote(query, safe="")
+    return f"https://open.spotify.com/search/{q}/playlists"
+
 
 def spotify_web_link(genre: str) -> str:
-    """Build a Spotify web search URL for the genre."""
-    encoded = genre.replace(" ", "%20")
-    return f"https://open.spotify.com/search/{encoded}/genres"
+    return spotify_playlist_search_url(genre)
+
+
+def spotify_deep_link(genre: str) -> str:
+    return spotify_playlist_search_url(genre)
 
 # ── EveryNoise link builder ──────────────────────────────────────────────────
 def everynoise_link(genre: str) -> str:
@@ -208,7 +211,7 @@ def build_slack_message(sku: str, result: dict) -> dict:
                 "elements": [
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "🎧 Open in Spotify", "emoji": True},
+                        "text": {"type": "plain_text", "text": "🎧 Playlist search in Spotify", "emoji": True},
                         "url": spotify_web_link(genre),
                         "style": "primary",
                     },
@@ -224,7 +227,7 @@ def build_slack_message(sku: str, result: dict) -> dict:
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": f"Tip: Copy <{spotify_deep_link(genre)}|this deep link> to open Spotify directly.",
+                        "text": f"Tip: <{spotify_deep_link(genre)}|Open playlist search> in Spotify (same query as the button).",
                     }
                 ],
             },
