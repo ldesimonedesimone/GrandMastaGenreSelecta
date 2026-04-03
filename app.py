@@ -1,4 +1,5 @@
 import os
+import re
 import hashlib
 import hmac
 import time
@@ -126,18 +127,29 @@ def sku_to_genre(sku: str) -> dict:
     conn = _CONN[(h // 23) % len(_CONN)].format(sku=sku, genre=genre)
     return {"genre": genre, "sku_meaning": sku_meaning, "connection": conn}
 
-# ── Spotify playlist search (web opens app; same path as “deep link” for playlists)
-def spotify_playlist_search_url(query: str) -> str:
+
+def extract_sku(raw: str) -> str:
+    s = raw.strip()
+    m = re.search(r"mcmaster\.com/([A-Za-z0-9]{4,12})(?:/|$|\?)", s, re.I)
+    if m:
+        return m.group(1).upper()
+    return "".join(c for c in s if c.isalnum()).upper()
+
+
+# ── Spotify search (genre in search box). Do not use /playlists in the path — the native
+# iOS/iPadOS app mis-handles it and puts the word "playlists" in the search field. Web can
+# still switch to the Playlists tab after opening /search/{q}.
+def spotify_search_url(query: str) -> str:
     q = quote(query, safe="")
-    return f"https://open.spotify.com/search/{q}/playlists"
+    return f"https://open.spotify.com/search/{q}"
 
 
 def spotify_web_link(genre: str) -> str:
-    return spotify_playlist_search_url(genre)
+    return spotify_search_url(genre)
 
 
 def spotify_deep_link(genre: str) -> str:
-    return spotify_playlist_search_url(genre)
+    return spotify_search_url(genre)
 
 # ── EveryNoise link builder ──────────────────────────────────────────────────
 def everynoise_link(genre: str) -> str:
@@ -211,7 +223,7 @@ def build_slack_message(sku: str, result: dict) -> dict:
                 "elements": [
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "🎧 Playlist search in Spotify", "emoji": True},
+                        "text": {"type": "plain_text", "text": "🎧 Search in Spotify", "emoji": True},
                         "url": spotify_web_link(genre),
                         "style": "primary",
                     },
@@ -227,7 +239,7 @@ def build_slack_message(sku: str, result: dict) -> dict:
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": f"Tip: <{spotify_deep_link(genre)}|Open playlist search> in Spotify (same query as the button).",
+                        "text": f"Tip: <{spotify_deep_link(genre)}|Open Spotify search> — same link as the button. On the website, switch to *Playlists*; in the mobile app, tap *Playlists* after search opens.",
                     }
                 ],
             },
@@ -257,7 +269,8 @@ def grandmasta_genre_selecta():
         return jsonify({"error": "Invalid signature"}), 403
 
     # Get SKU from slash command text, e.g. /grandmastagenreselecta 91251A307
-    sku = request.form.get("text", "").strip().upper()
+    # Strip quotes / punctuation so "5621N15" and pasted URLs still work.
+    sku = extract_sku(request.form.get("text", ""))
 
     if not sku:
         return jsonify({

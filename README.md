@@ -1,13 +1,13 @@
 # GrandMastaGenreSelecta
 
-A Slack slash command that takes a McMaster-Carr SKU from your physical catalog, deterministically maps it to a music genre in the style of [EveryNoise.com](https://everynoise.com) (pure Python — no AI), and posts the result to your Slack channel with **Spotify playlist search** (for the mapped genre) and EveryNoise links.
+A Slack slash command that takes a McMaster-Carr SKU from your physical catalog, deterministically maps it to a music genre in the style of [EveryNoise.com](https://everynoise.com) (pure Python — no AI), and posts the result to your Slack channel with **Spotify search** links for the mapped genre (opens the genre in the search box; on the web you can switch to the Playlists tab — we avoid `/search/.../playlists` URLs because the native iPad/iPhone app mishandles them) and EveryNoise links.
 
 **Example output:**
 > 🔩 **GrandMastaGenreSelecta** 🎵
 > SKU: `91251A307` → Genre: *deep nordic folk*
 > SKU Decoded: Letters `A` × digits `91251307` → chrome vanadium attitude, hex nut certainty, catalog gravity.
 > Why this genre: The checksum that fingerprinted `91251A307` also landed on *deep nordic folk* — same warehouse, different aisle.
-> [🎧 Playlist search in Spotify] [🗺️ Explore on EveryNoise]
+> [🎧 Search in Spotify] [🗺️ Explore on EveryNoise]
 
 ---
 
@@ -129,7 +129,7 @@ Just type the SKU from your physical catalog after the command. The bot responds
 - The SKU you entered
 - The mapped music genre
 - Deterministic “decode” lines derived from the SKU
-- A button to open **playlist search** in Spotify for the mapped genre
+- A button to open **Spotify search** for the mapped genre (then choose Playlists on web or in the app)
 - A button to explore the genre on EveryNoise.com
 
 ---
