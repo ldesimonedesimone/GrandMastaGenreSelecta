@@ -1,6 +1,14 @@
 # GrandMastaGenreSelecta
 
-A Slack slash command that takes a McMaster-Carr SKU from your physical catalog, deterministically maps it to a music genre in the style of [EveryNoise.com](https://everynoise.com) (pure Python — no AI), and posts the result to your Slack channel with **Spotify search** links for the mapped genre (opens the genre in the search box; on the web you can switch to the Playlists tab — we avoid `/search/.../playlists` URLs because the native iPad/iPhone app mishandles them) and EveryNoise links.
+A Slack slash command that maps a McMaster-Carr SKU to a music genre in the style of [EveryNoise.com](https://everynoise.com), then posts to Slack with **Spotify search** and EveryNoise links.
+
+**Mapping engine (toggle on the web):**
+- **`hash`** (default) — fast deterministic mapping (no API calls).
+- **`anthropic`** — Claude maps the SKU (needs `ANTHROPIC_API_KEY`). Slack gets an instant “working…” message, then the full card via `response_url` so you avoid **Slack’s ~3s slash-command timeout**.
+
+Open **`/`** on your deployed app for a small control panel; **`/status`** returns JSON including the active engine.
+
+Spotify uses `/search/{query}` only (no `/playlists` path) so the native iPad/iPhone app does not put the word `playlists` in the search bar.
 
 **Example output:**
 > 🔩 **GrandMastaGenreSelecta** 🎵
@@ -14,7 +22,7 @@ A Slack slash command that takes a McMaster-Carr SKU from your physical catalog,
 ## How It Works
 
 1. You type `/grandmastagenreselecta` followed by a SKU from your physical McMaster-Carr catalog
-2. The app hashes the SKU and picks a genre plus canned “decode” lines (same SKU → same result every time)
+2. Either the **hash** engine or **Claude** maps the SKU to a genre (see engine toggle on `/`)
 3. A message is posted to your channel with the SKU, genre, text, and links
 
 ---
@@ -88,6 +96,8 @@ Deploy to Railway or Render (see below), then use the app’s live URL as the Re
 2. Push this project to a GitHub repo, connect it
 3. Add environment variables in Railway dashboard:
    - `SLACK_SIGNING_SECRET`
+   - `ANTHROPIC_API_KEY` (if you use **anthropic** mode)
+   - Optional: `ADMIN_TOKEN` (required to change engine via the `/` page when set), `ENGINE_DEFAULT` (`hash` or `anthropic`)
 4. Railway auto-detects the `Procfile` and deploys
 5. Copy the generated URL (e.g. `https://grandmastagenreselecta.up.railway.app`)
 6. Update your Slack slash command Request URL to `https://YOUR-RAILWAY-URL/grandmastagenreselecta`
@@ -118,6 +128,17 @@ Once deployed:
 
 ---
 
+## Engine toggle
+
+After deploy, visit **`https://YOUR-HOST/`** in a browser:
+
+- Choose **hash** or **anthropic** and save (enter **Admin token** if you set `ADMIN_TOKEN` in Railway).
+- If `ADMIN_TOKEN` is unset, quick links work without a token (dev only).
+
+**`/status`** JSON shows the active engine. The choice is stored in a small file on the server (`.engine_mode` next to `app.py`, or `ENGINE_MODE_FILE`); it resets if that file is lost on redeploy unless you set `ENGINE_DEFAULT`.
+
+---
+
 ## Usage
 
 In any Slack channel your app is invited to:
@@ -128,7 +149,7 @@ In any Slack channel your app is invited to:
 Just type the SKU from your physical catalog after the command. The bot responds in-channel with:
 - The SKU you entered
 - The mapped music genre
-- Deterministic “decode” lines derived from the SKU
+- “Decode” lines (deterministic hash text, or Claude when that engine is active)
 - A button to open **Spotify search** for the mapped genre (then choose Playlists on web or in the app)
 - A button to explore the genre on EveryNoise.com
 
@@ -152,4 +173,8 @@ GrandMastaGenreSelecta/
 | Variable | Required | Description |
 |---|---|---|
 | `SLACK_SIGNING_SECRET` | ✅ | From Slack app Basic Information |
+| `ANTHROPIC_API_KEY` | For Claude mode | Required when engine is `anthropic` |
+| `ENGINE_DEFAULT` | Optional | `hash` or `anthropic` if no `.engine_mode` file |
+| `ADMIN_TOKEN` | Optional | If set, required to change engine via `/` |
+| `ENGINE_MODE_FILE` | Optional | Override path for engine state file |
 | `PORT` | Optional | Defaults to 3000 |

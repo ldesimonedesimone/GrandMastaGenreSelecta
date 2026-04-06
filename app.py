@@ -1,15 +1,20 @@
+import html
+import json
 import os
 import re
 import hashlib
 import hmac
+import threading
 import time
 from urllib.parse import quote
-from flask import Flask, request, jsonify
+
+import requests
+from anthropic import Anthropic
+from flask import Flask, Response, jsonify, redirect, request
 
 app = Flask(__name__)
 
 # ── Deterministic SKU → genre (no LLM) ───────────────────────────────────────
-# Genres styled like EveryNoise.com (lowercase); same SKU always maps the same way.
 _GENRES = (
     "vapor twitch",
     "dark clubbing",
@@ -125,7 +130,50 @@ def sku_to_genre(sku: str) -> dict:
     )
 
     conn = _CONN[(h // 23) % len(_CONN)].format(sku=sku, genre=genre)
-    return {"genre": genre, "sku_meaning": sku_meaning, "connection": conn}
+    return {
+        "genre": genre,
+        "sku_meaning": sku_meaning,
+        "connection": conn,
+        "engine": "hash",
+    }
+
+
+def sku_to_genre_anthropic(sku: str) -> dict:
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    prompt = f"""You are a creative DJ who works at an industrial supply warehouse.
+Your job is to map McMaster-Carr hardware SKUs to music genres from EveryNoise.com.
+
+The SKU is: {sku}
+
+Rules:
+1. Decode the SKU creatively — the numbers and letters can suggest material, size,
+   application, texture, weight, era, or vibe.
+2. Map it to a real genre from EveryNoise.com (e.g. "vapor twitch", "dark clubbing",
+   "deep nordic folk", "industrial metal", "labor day", etc.)
+3. The connection should be surprising, funny, or poetic — not obvious.
+4. Keep the genre name lowercase, exactly as it would appear on everynoise.com.
+5. Do not mention AI vendors, chatbots, or model names in the JSON string values.
+
+Respond with ONLY valid JSON in this exact format (no markdown, no extra text):
+{{
+  "genre": "the genre name",
+  "sku_meaning": "one sentence on what the SKU 'means'",
+  "connection": "one sentence on why this SKU maps to this genre"
+}}"""
+
+    client = Anthropic(api_key=key)
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = message.content[0].text.strip()
+    out = json.loads(raw)
+    out["engine"] = "anthropic"
+    return out
 
 
 def extract_sku(raw: str) -> str:
@@ -136,9 +184,46 @@ def extract_sku(raw: str) -> str:
     return "".join(c for c in s if c.isalnum()).upper()
 
 
-# ── Spotify search (genre in search box). Do not use /playlists in the path — the native
-# iOS/iPadOS app mis-handles it and puts the word "playlists" in the search field. Web can
-# still switch to the Playlists tab after opening /search/{q}.
+def _engine_path() -> str:
+    return os.environ.get("ENGINE_MODE_FILE") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        ".engine_mode",
+    )
+
+
+def get_engine_mode() -> str:
+    default = os.environ.get("ENGINE_DEFAULT", "hash").strip().lower()
+    if default not in ("hash", "anthropic"):
+        default = "hash"
+    p = _engine_path()
+    try:
+        with open(p, encoding="utf-8") as f:
+            v = f.read().strip().lower()
+            if v in ("hash", "anthropic"):
+                return v
+    except FileNotFoundError:
+        pass
+    return default
+
+
+def set_engine_mode(mode: str) -> None:
+    mode = mode.strip().lower()
+    assert mode in ("hash", "anthropic")
+    p = _engine_path()
+    d = os.path.dirname(p)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(mode)
+
+
+def _admin_token_ok(provided: str | None) -> bool:
+    expected = os.environ.get("ADMIN_TOKEN", "").strip()
+    if not expected:
+        return True
+    return (provided or "").strip() == expected
+
+
 def spotify_search_url(query: str) -> str:
     q = quote(query, safe="")
     return f"https://open.spotify.com/search/{q}"
@@ -151,23 +236,24 @@ def spotify_web_link(genre: str) -> str:
 def spotify_deep_link(genre: str) -> str:
     return spotify_search_url(genre)
 
-# ── EveryNoise link builder ──────────────────────────────────────────────────
+
 def everynoise_link(genre: str) -> str:
-    """Build an EveryNoise.com link for the genre."""
-    slug = genre.replace(" ", "")  # EveryNoise removes spaces in anchors
+    slug = genre.replace(" ", "")
     return f"https://everynoise.com/#{slug}"
 
-# ── Slack signature verification ─────────────────────────────────────────────
+
+def mcmaster_product_url(sku: str) -> str:
+    return f"https://www.mcmaster.com/{sku}/"
+
+
 def verify_slack_signature(request) -> bool:
-    """Verify the request actually came from Slack."""
     signing_secret = os.environ.get("SLACK_SIGNING_SECRET", "")
     if not signing_secret:
-        return True  # Skip verification if secret not configured (dev mode)
+        return True
 
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
 
-    # Reject requests older than 5 minutes
     if abs(time.time() - int(timestamp)) > 300:
         return False
 
@@ -180,9 +266,11 @@ def verify_slack_signature(request) -> bool:
 
     return hmac.compare_digest(expected, signature)
 
-# ── Slack message builder ────────────────────────────────────────────────────
+
 def build_slack_message(sku: str, result: dict) -> dict:
     genre = result["genre"]
+    mcm = mcmaster_product_url(sku)
+    sku_block = f"*McMaster-Carr SKU:*\n<{mcm}|McMaster Item> · `{sku}`"
     return {
         "response_type": "in_channel",
         "blocks": [
@@ -199,7 +287,7 @@ def build_slack_message(sku: str, result: dict) -> dict:
                 "fields": [
                     {
                         "type": "mrkdwn",
-                        "text": f"*McMaster-Carr SKU:*\n`{sku}`",
+                        "text": sku_block,
                     },
                     {
                         "type": "mrkdwn",
@@ -239,22 +327,118 @@ def build_slack_message(sku: str, result: dict) -> dict:
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": f"Tip: <{spotify_deep_link(genre)}|Open Spotify search> — same link as the button. On the website, switch to *Playlists*; in the mobile app, tap *Playlists* after search opens.",
-                    }
+                        "text": (
+                            f"Tip: <{spotify_deep_link(genre)}|Open Spotify search> — same link as the button. "
+                            "On the website, switch to *Playlists*; in the mobile app, tap *Playlists* after search opens."
+                        ),
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            "Spotify *Jam* invite links are created in the app when someone starts a Jam; "
+                            "there is no public URL this bot can generate for “join jam” ahead of time."
+                        ),
+                    },
                 ],
             },
         ],
     }
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
-@app.route("/", methods=["GET"])
+def _post_slack_delayed(response_url: str, sku: str) -> None:
+    try:
+        result = sku_to_genre_anthropic(sku)
+        payload = build_slack_message(sku, result)
+        requests.post(response_url, json=payload, timeout=60)
+    except Exception as e:
+        requests.post(
+            response_url,
+            json={
+                "response_type": "ephemeral",
+                "text": f"⚠️ Mapping failed: {str(e)}",
+            },
+            timeout=30,
+        )
+
+
+def _html_dashboard() -> str:
+    mode = get_engine_mode()
+    need_token = bool(os.environ.get("ADMIN_TOKEN", "").strip())
+    token_hint = (
+        "<p>Set <code>ADMIN_TOKEN</code> in the environment; use the form below with the token (quick links are disabled).</p>"
+        if need_token
+        else "<p><em>No <code>ADMIN_TOKEN</code> — quick links work; fine for local dev only.</em></p>"
+    )
+    base = request.url_root.rstrip("/")
+    h_sel = " selected" if mode == "hash" else ""
+    a_sel = " selected" if mode == "anthropic" else ""
+    quick = ""
+    if not need_token:
+        quick = f"""<p>
+<a class="button" href="{html.escape(base)}/?set=hash">Use hash</a>
+<a class="button" href="{html.escape(base)}/?set=anthropic">Use Anthropic</a>
+</p>"""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>GrandMastaGenreSelecta</title>
+<style>
+body {{ font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }}
+code {{ background: #eee; padding: 0.1em 0.3em; border-radius: 4px; }}
+a.button {{ display: inline-block; margin: 0.25rem 0.5rem 0.25rem 0; padding: 0.5rem 0.75rem;
+  background: #222; color: #fff; text-decoration: none; border-radius: 6px; }}
+footer {{ margin-top: 2rem; font-size: 0.9rem; color: #555; }}
+</style>
+</head>
+<body>
+<h1>GrandMastaGenreSelecta</h1>
+<p>Active mapping engine: <strong>{html.escape(mode)}</strong></p>
+<p><code>hash</code> = fast deterministic mapping. <code>anthropic</code> = cloud LLM mapping (needs <code>ANTHROPIC_API_KEY</code>; Slack uses async reply to avoid timeout).</p>
+{token_hint}
+{quick}
+<form method="post" action="{html.escape(base)}/" style="margin-top:1rem;">
+<label>Switch via form<br/>
+<select name="mode">
+<option value="hash"{h_sel}>hash</option>
+<option value="anthropic"{a_sel}>anthropic</option>
+</select></label>
+<p><label>Admin token (if <code>ADMIN_TOKEN</code> is set): <input name="token" type="password" autocomplete="off" style="width:100%;max-width:20rem"/></label></p>
+<button type="submit">Save engine</button>
+</form>
+<footer>
+<p>JSON: <a href="{html.escape(base)}/status"><code>/status</code></a></p>
+</footer>
+</body>
+</html>"""
+
+
+@app.route("/", methods=["GET", "POST"])
 def index():
+    if request.method == "POST":
+        m = request.form.get("mode", "").strip().lower()
+        if m in ("hash", "anthropic") and _admin_token_ok(request.form.get("token")):
+            set_engine_mode(m)
+        return redirect("/")
+
+    if request.args.get("set") in ("hash", "anthropic"):
+        if _admin_token_ok(request.args.get("token")):
+            set_engine_mode(request.args.get("set", ""))
+        return redirect("/")
+
+    return Response(_html_dashboard(), mimetype="text/html")
+
+
+@app.route("/status", methods=["GET"])
+def status():
     return jsonify({
         "app": "GrandMastaGenreSelecta",
         "status": "running",
+        "engine": get_engine_mode(),
         "health": "/health",
         "slack_command_url": "/grandmastagenreselecta",
+        "admin_token_required": bool(os.environ.get("ADMIN_TOKEN", "").strip()),
     })
 
 
@@ -268,8 +452,6 @@ def grandmasta_genre_selecta():
     if not verify_slack_signature(request):
         return jsonify({"error": "Invalid signature"}), 403
 
-    # Get SKU from slash command text, e.g. /grandmastagenreselecta 91251A307
-    # Strip quotes / punctuation so "5621N15" and pasted URLs still work.
     sku = extract_sku(request.form.get("text", ""))
 
     if not sku:
@@ -281,7 +463,6 @@ def grandmasta_genre_selecta():
             ),
         })
 
-    # Basic SKU validation — alphanumeric, 4–12 characters
     if not sku.isalnum() or not (4 <= len(sku) <= 12):
         return jsonify({
             "response_type": "ephemeral",
@@ -290,6 +471,30 @@ def grandmasta_genre_selecta():
                 "SKUs are alphanumeric and typically 6–10 characters, e.g. `91251A307`.\n"
                 "Try again with a SKU from your catalog."
             ),
+        })
+
+    engine = get_engine_mode()
+
+    if engine == "anthropic":
+        if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+            return jsonify({
+                "response_type": "ephemeral",
+                "text": "⚠️ Anthropic mode is on but `ANTHROPIC_API_KEY` is not set in the server environment.",
+            })
+
+        response_url = request.form.get("response_url", "")
+        if not response_url:
+            return jsonify({"error": "Missing response_url"}), 400
+
+        threading.Thread(
+            target=_post_slack_delayed,
+            args=(response_url, sku),
+            daemon=True,
+        ).start()
+
+        return jsonify({
+            "response_type": "ephemeral",
+            "text": "⏳ Mapping your SKU… (this can take a few seconds)",
         })
 
     try:
