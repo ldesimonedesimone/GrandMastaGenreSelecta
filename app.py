@@ -332,13 +332,6 @@ def build_slack_message(sku: str, result: dict) -> dict:
                             "On the website, switch to *Playlists*; in the mobile app, tap *Playlists* after search opens."
                         ),
                     },
-                    {
-                        "type": "mrkdwn",
-                        "text": (
-                            "Spotify *Jam* invite links are created in the app when someone starts a Jam; "
-                            "there is no public URL this bot can generate for “join jam” ahead of time."
-                        ),
-                    },
                 ],
             },
         ],
